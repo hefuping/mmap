@@ -17,13 +17,12 @@
 #define DEVICE_NODE	"mmap"
 #define BUFFER_SIZE (4*1024*1024)
  struct my_dev{
-    char devname[24];/*字符设备的节点名*/
     dev_t devno ;
     struct cdev cdev;
     dev_t dev_num;
     struct device *dev;
     struct class * my_class;
-    void __iomem *    buff_base;/*内核态虚拟地址*/
+    void __iomem *    buff_base;/*内核态缓存区虚拟地址*/
 };
 typedef struct my_dev * my_dev_t;
 my_dev_t my_dev;
@@ -60,19 +59,39 @@ static int32_t char_open(struct inode *inode, struct file *filp)
 	printk("line:%d\tfunc:%s\n",__LINE__,__func__);
 	return 0;
 }
+ssize_t char_read(struct file *filp, char __user *pbuf, size_t count, loff_t *f_pos)
+{
+	my_dev_t mydevp;
+	ssize_t len,result = 0;
+	mydevp = filp->private_data;
+	len = count<BUFFER_SIZE?count:BUFFER_SIZE;
+	if (copy_to_user (pbuf,mydevp->buff_base,len))
+		result = -EFAULT;
+	else
+		printk ("wrote %d bytes\n", count);
+	return len;
+}
+ssize_t char_write(struct file *filp, const char __user *pbuf, size_t count, loff_t *f_pos)
+{
+	my_dev_t mydevp;
+	ssize_t len,result = 0;
+	mydevp = filp->private_data;
+	len = count<BUFFER_SIZE?count:BUFFER_SIZE;
+	if (copy_from_user (mydevp->buff_base, pbuf, len))
+		result = -EFAULT;
+	return len;
+}
 static int32_t char_release(struct inode *inode, struct file *filp)
 {
 	struct page *page;
 	my_dev_t mydevp;
 	mydevp = filp->private_data;
     page=virt_to_page(mydevp->buff_base);
-    printk("line:%d\tfunc:%s\n",__LINE__,__func__);
 	for(;page<virt_to_page(mydevp->buff_base+BUFFER_SIZE);page++)
 	{
 		ClearPageReserved(page);
 	}
 	kfree(mydevp->buff_base);
-	printk("line:%d\tfunc:%s\n",__LINE__,__func__);
 	return 0;
 }
 
@@ -89,7 +108,7 @@ int char_mmap(struct file *filp, struct vm_area_struct *vma)
 		return -ENOMEM;
 	}
 	vma->vm_flags|=VM_DONTEXPAND | VM_DONTDUMP;
-
+	//将一个内核虚地址mydevp->buff_base转化成页的描述结构 struct page *，然后根据需要的大小size进行映射
 	if(remap_pfn_range(vma,vma->vm_start,page_to_pfn(virt_to_page(mydevp->buff_base)),size,vma->vm_page_prot))
 	return -EAGAIN;
 	printk("2vma start 0x%lx ,end 0x%lx ,vm_pgoff 0x%lx\n",vma->vm_start,vma->vm_end,vma->vm_pgoff);
@@ -100,6 +119,8 @@ struct file_operations char_fops = {
   .owner = THIS_MODULE,
   .open = char_open,
   .release = char_release,
+  .read = char_read,
+  .write = char_write,
   .mmap = char_mmap,
 };
 
